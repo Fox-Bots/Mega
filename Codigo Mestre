@@ -1,405 +1,358 @@
 /*
-   MEGA MESTRE OBR
-   Seguidor de linha + Resgate
-   A2a + Ultrassônicos da Escrava
+  MEGA MESTRE OBR
+  Seguidor de linha, obstaculo e resgate.
+  Recebe quatro distancias em cm da placa escrava A2a:
+  frente, esquerda, direita e tras.
 */
-
 
 #include <A2a.h>
 
-
 #define ENDERECO_ESCRAVA 8
-
 
 A2a arduinoMaster;
 
-
 // ================= MOTORES =================
-
 #define ME_F 2
 #define ME_R 3
-
 #define MD_F 4
 #define MD_R 5
 
-
-
-// ================= SENSORES LINHA =================
-
+// ================= SENSORES DE LINHA =================
 #define C1 A7
-
 #define S1 A1
 #define S2 A2
 #define S3 A3
 #define S4 A4
 #define S5 A5
-
 #define S6 A11
-
 #define C2 A8
 
+// ================= A2A / ULTRASSONICOS =================
+#define VAR_FRENTE 0
+#define VAR_ESQUERDA 1
+#define VAR_DIREITA 2
+#define VAR_TRAS 3
 
+const int DISTANCIA_SEM_ECO_CM = 250;
+const int LIMITE_OBSTACULO_CM = 20;
+const int LIMITE_PAREDE_CM = 35;
+const int LIMITE_VITIMA_CM = 14;
+const int LIMITE_DEPOSITO_CM = 18;
+const int LIMITE_LATERAL_OBSTACULO_CM = 30;
 
-// ================= ULTRASSÔNICOS RECEBIDOS =================
+const unsigned long INTERVALO_LEITURA_US_MS = 80UL;
+const unsigned long TEMPO_MAX_GAP_MS = 650UL;
+const unsigned long TEMPO_GIRO_DESVIO_MS = 300UL;
+const unsigned long TEMPO_MAX_CONTORNO_MS = 2800UL;
 
-int ultraFrente = 400;
-int ultraEsquerda = 400;
-int ultraDireita = 400;
-int ultraTras = 400;
+int ultraFrente = DISTANCIA_SEM_ECO_CM;
+int ultraEsquerda = DISTANCIA_SEM_ECO_CM;
+int ultraDireita = DISTANCIA_SEM_ECO_CM;
+int ultraTras = DISTANCIA_SEM_ECO_CM;
 
-
-
-#define LIMITE_PAREDE 35
-#define LIMITE_OBJETO 20
-
-
+unsigned long ultimaLeituraUltrassomMs = 0;
+unsigned long inicioGapMs = 0;
+unsigned long inicioManobraMs = 0;
+unsigned long ultimoLogMs = 0;
 
 // ================= ESTADOS =================
-
-enum Estado{
-
-LINHA,
-RESGATE,
-SAIDA_RESGATE
-
+enum Estado {
+  LINHA,
+  RESGATE,
+  SAIDA_RESGATE
 };
 
+enum Direcao {
+  DIRECAO_ESQUERDA,
+  DIRECAO_RETA,
+  DIRECAO_DIREITA
+};
+
+enum FaseObstaculo {
+  SEM_OBSTACULO,
+  SAINDO_DA_LINHA,
+  CONTORNANDO_OBSTACULO,
+  VOLTANDO_PARA_LINHA
+};
 
 Estado estadoAtual = LINHA;
+Direcao ultimaCorrecao = DIRECAO_RETA;
+Direcao ladoDesvio = DIRECAO_DIREITA;
+FaseObstaculo faseObstaculo = SEM_OBSTACULO;
 
-
-String movimento;
-
-
+bool obstaculoFoiVistoPelosSensores = false;
+byte leiturasLivres = 0;
 
 // ================= SETUP =================
+void setup() {
+  Serial.begin(9600);
+  arduinoMaster.begin();
 
-void setup(){
+  pinMode(ME_F, OUTPUT);
+  pinMode(ME_R, OUTPUT);
+  pinMode(MD_F, OUTPUT);
+  pinMode(MD_R, OUTPUT);
 
+  pinMode(C1, INPUT);
+  pinMode(C2, INPUT);
+  pinMode(S1, INPUT);
+  pinMode(S2, INPUT);
+  pinMode(S3, INPUT);
+  pinMode(S4, INPUT);
+  pinMode(S5, INPUT);
+  pinMode(S6, INPUT);
 
-Serial.begin(9600);
-
-
-arduinoMaster.begin();
-
-
-
-pinMode(ME_F,OUTPUT);
-pinMode(ME_R,OUTPUT);
-
-pinMode(MD_F,OUTPUT);
-pinMode(MD_R,OUTPUT);
-
-
-
-Serial.println("MEGA MESTRE OBR ONLINE");
-
-
+  parar();
+  Serial.println(F("MEGA MESTRE OBR ONLINE"));
 }
-
-
 
 // ================= MOTORES =================
-
-
-void frente(){
-
-digitalWrite(ME_F,HIGH);
-digitalWrite(ME_R,LOW);
-
-digitalWrite(MD_F,HIGH);
-digitalWrite(MD_R,LOW);
-
-movimento="FRENTE";
-
+void frente() {
+  digitalWrite(ME_F, HIGH);
+  digitalWrite(ME_R, LOW);
+  digitalWrite(MD_F, HIGH);
+  digitalWrite(MD_R, LOW);
 }
 
-
-
-void esquerda(){
-
-digitalWrite(ME_F,LOW);
-digitalWrite(ME_R,LOW);
-
-digitalWrite(MD_F,HIGH);
-digitalWrite(MD_R,LOW);
-
-movimento="ESQUERDA";
-
+void esquerda() {
+  digitalWrite(ME_F, LOW);
+  digitalWrite(ME_R, LOW);
+  digitalWrite(MD_F, HIGH);
+  digitalWrite(MD_R, LOW);
 }
 
-
-
-void direita(){
-
-digitalWrite(ME_F,HIGH);
-digitalWrite(ME_R,LOW);
-
-digitalWrite(MD_F,LOW);
-digitalWrite(MD_R,LOW);
-
-movimento="DIREITA";
-
+void direita() {
+  digitalWrite(ME_F, HIGH);
+  digitalWrite(ME_R, LOW);
+  digitalWrite(MD_F, LOW);
+  digitalWrite(MD_R, LOW);
 }
 
-
-
-void parar(){
-
-digitalWrite(ME_F,LOW);
-digitalWrite(ME_R,LOW);
-
-digitalWrite(MD_F,LOW);
-digitalWrite(MD_R,LOW);
-
-movimento="PARADO";
-
+void parar() {
+  digitalWrite(ME_F, LOW);
+  digitalWrite(ME_R, LOW);
+  digitalWrite(MD_F, LOW);
+  digitalWrite(MD_R, LOW);
 }
 
+// ================= A2A =================
+void lerUltrassonicos() {
+  if (millis() - ultimaLeituraUltrassomMs < INTERVALO_LEITURA_US_MS) {
+    return;
+  }
 
+  ultimaLeituraUltrassomMs = millis();
 
-// ================= LINHA =================
-
-
-void seguirLinha(){
-
-
-int s1=digitalRead(S1);
-int s2=digitalRead(S2);
-int s3=digitalRead(S3);
-int s4=digitalRead(S4);
-int s5=digitalRead(S5);
-int s6=digitalRead(S6);
-
-
-
-if(s1==LOW || s2==LOW){
-
-esquerda();
-
+  ultraFrente = arduinoMaster.varWireRead(ENDERECO_ESCRAVA, VAR_FRENTE);
+  ultraEsquerda = arduinoMaster.varWireRead(ENDERECO_ESCRAVA, VAR_ESQUERDA);
+  ultraDireita = arduinoMaster.varWireRead(ENDERECO_ESCRAVA, VAR_DIREITA);
+  ultraTras = arduinoMaster.varWireRead(ENDERECO_ESCRAVA, VAR_TRAS);
 }
 
+void registrarUltrassons() {
+  if (millis() - ultimoLogMs < 300UL) {
+    return;
+  }
 
-else if(s3==LOW || s6==LOW){
-
-frente();
-
+  ultimoLogMs = millis();
+  Serial.print(F("US F/E/D/T: "));
+  Serial.print(ultraFrente);
+  Serial.print('/');
+  Serial.print(ultraEsquerda);
+  Serial.print('/');
+  Serial.print(ultraDireita);
+  Serial.print('/');
+  Serial.println(ultraTras);
 }
 
-
-else if(s4==LOW || s5==LOW){
-
-direita();
-
+// ================= LINHA E GAP =================
+bool linhaVisivel() {
+  return digitalRead(S1) == LOW || digitalRead(S2) == LOW ||
+         digitalRead(S3) == LOW || digitalRead(S4) == LOW ||
+         digitalRead(S5) == LOW || digitalRead(S6) == LOW;
 }
 
-
-else{
-
-frente();
-
+void procurarLinhaDepoisDoGap() {
+  // Atravessa gaps em linha reta; se a linha nao reaparecer dentro da
+  // margem calibrada, procura na ultima direcao de correcao.
+  if (ultimaCorrecao == DIRECAO_ESQUERDA) {
+    esquerda();
+  } else if (ultimaCorrecao == DIRECAO_DIREITA) {
+    direita();
+  } else {
+    frente();
+  }
 }
 
+void seguirLinha() {
+  int s1 = digitalRead(S1);
+  int s2 = digitalRead(S2);
+  int s3 = digitalRead(S3);
+  int s4 = digitalRead(S4);
+  int s5 = digitalRead(S5);
+  int s6 = digitalRead(S6);
 
+  if (!linhaVisivel()) {
+    if (inicioGapMs == 0) {
+      inicioGapMs = millis();
+    }
 
+    if (millis() - inicioGapMs <= TEMPO_MAX_GAP_MS) {
+      frente();
+    } else {
+      procurarLinhaDepoisDoGap();
+    }
+    return;
+  }
+
+  inicioGapMs = 0;
+
+  if (s1 == LOW || s2 == LOW) {
+    ultimaCorrecao = DIRECAO_ESQUERDA;
+    esquerda();
+  } else if (s3 == LOW || s6 == LOW) {
+    ultimaCorrecao = DIRECAO_RETA;
+    frente();
+  } else if (s4 == LOW || s5 == LOW) {
+    ultimaCorrecao = DIRECAO_DIREITA;
+    direita();
+  }
 }
 
+// ================= OBSTACULO NO TRAJETO =================
+bool obstaculoNosSensoresLateraisOuTras() {
+  return ultraEsquerda < LIMITE_LATERAL_OBSTACULO_CM ||
+         ultraDireita < LIMITE_LATERAL_OBSTACULO_CM ||
+         ultraTras < LIMITE_LATERAL_OBSTACULO_CM;
+}
 
+void iniciarDesvioDeObstaculo() {
+  ladoDesvio = ultraDireita >= ultraEsquerda ? DIRECAO_DIREITA : DIRECAO_ESQUERDA;
+  faseObstaculo = SAINDO_DA_LINHA;
+  inicioManobraMs = millis();
+  obstaculoFoiVistoPelosSensores = false;
+  leiturasLivres = 0;
+
+  Serial.println(F("OBSTACULO NA FRENTE: iniciando desvio"));
+}
+
+void executarDesvioDeObstaculo() {
+  if (faseObstaculo == SAINDO_DA_LINHA) {
+    if (ladoDesvio == DIRECAO_DIREITA) {
+      direita();
+    } else {
+      esquerda();
+    }
+
+    if (millis() - inicioManobraMs >= TEMPO_GIRO_DESVIO_MS) {
+      faseObstaculo = CONTORNANDO_OBSTACULO;
+      inicioManobraMs = millis();
+    }
+    return;
+  }
+
+  if (faseObstaculo == CONTORNANDO_OBSTACULO) {
+    frente();
+
+    if (obstaculoNosSensoresLateraisOuTras()) {
+      obstaculoFoiVistoPelosSensores = true;
+      leiturasLivres = 0;
+    } else if (obstaculoFoiVistoPelosSensores) {
+      leiturasLivres++;
+    }
+
+    // Tres leituras livres apos a deteccao confirmam que o objeto ficou
+    // para tras/lado. O limite de tempo evita travar se a geometria do
+    // sensor nao enxergar o obstaculo durante todo o contorno.
+    if ((obstaculoFoiVistoPelosSensores && leiturasLivres >= 3) ||
+        millis() - inicioManobraMs >= TEMPO_MAX_CONTORNO_MS) {
+      faseObstaculo = VOLTANDO_PARA_LINHA;
+      inicioManobraMs = millis();
+      Serial.println(F("OBSTACULO ULTRAPASSADO: procurando a linha"));
+    }
+    return;
+  }
+
+  if (faseObstaculo == VOLTANDO_PARA_LINHA) {
+    if (ladoDesvio == DIRECAO_DIREITA) {
+      esquerda();
+    } else {
+      direita();
+    }
+
+    if (millis() - inicioManobraMs >= TEMPO_GIRO_DESVIO_MS) {
+      faseObstaculo = SEM_OBSTACULO;
+      inicioGapMs = 0;
+    }
+  }
+}
 
 // ================= RESGATE =================
+void modoResgate() {
+  registrarUltrassons();
 
+  // Um HC-SR04 identifica proximidade, nao tipo de objeto. Pare aqui para
+  // a rotina do seu mecanismo de coleta tratar uma possivel vitima/parede.
+  if (ultraFrente < LIMITE_VITIMA_CM) {
+    parar();
+    Serial.println(F("OBJETO FRONTAL: possivel vitima ou parede"));
+    return;
+  }
 
-void modoResgate(){
+  // O sensor traseiro apenas indica que ha algo proximo atras. Ele nao
+  // distingue sozinho a area verde da vermelha; isso exige sensor de cor
+  // ou outra estrategia de identificacao.
+  if (ultraTras < LIMITE_DEPOSITO_CM) {
+    Serial.println(F("OBJETO TRASEIRO: possivel parede/ponto de deposito"));
+  }
 
+  if (ultraEsquerda < LIMITE_PAREDE_CM &&
+      ultraDireita < LIMITE_PAREDE_CM) {
+    Serial.println(F("CORREDOR DE RESGATE"));
+  }
 
-Serial.println("=== RESGATE ===");
-
-
-
-// RECEBER DADOS DA ESCRAVA
-// Coloque aqui a função da sua A2a:
-//
-// ultraFrente = leitura(8,1);
-// ultraEsquerda = leitura(8,2);
-// ultraDireita = leitura(8,3);
-// ultraTras = leitura(8,4);
-
-
-
-Serial.print("Frente: ");
-Serial.println(ultraFrente);
-
-
-Serial.print("Esq: ");
-Serial.println(ultraEsquerda);
-
-
-Serial.print("Dir: ");
-Serial.println(ultraDireita);
-
-
-Serial.print("Tras: ");
-Serial.println(ultraTras);
-
-
-
-
-// Obstáculo na frente
-
-if(ultraFrente < LIMITE_OBJETO){
-
-
-parar();
-
-delay(200);
-
-
-// escolhe lado livre
-
-if(ultraDireita > ultraEsquerda){
-
-
-direita();
-
-delay(500);
-
-
+  frente();
 }
 
-
-else{
-
-
-esquerda();
-
-delay(500);
-
-
+// ================= SAIDA =================
+void sairResgate() {
+  if (digitalRead(S6) == LOW) {
+    estadoAtual = LINHA;
+    inicioGapMs = 0;
+  } else {
+    frente();
+  }
 }
-
-
-
-}
-
-
-// corredor com paredes
-
-else if(
-ultraEsquerda < LIMITE_PAREDE &&
-ultraDireita < LIMITE_PAREDE
-){
-
-
-Serial.println("CORREDOR DE RESGATE");
-
-
-frente();
-
-
-}
-
-
-
-// espaço livre
-
-else{
-
-
-frente();
-
-
-}
-
-
-
-}
-
-
-
-// ================= SAÍDA =================
-
-
-void sairResgate(){
-
-
-if(digitalRead(S6)==LOW){
-
-
-estadoAtual=LINHA;
-
-
-}
-
-else{
-
-
-frente();
-
-}
-
-
-}
-
-
 
 // ================= LOOP =================
+void loop() {
+  lerUltrassonicos();
 
+  switch (estadoAtual) {
+    case LINHA:
+      if (faseObstaculo != SEM_OBSTACULO) {
+        executarDesvioDeObstaculo();
+      } else if (ultraFrente < LIMITE_OBSTACULO_CM) {
+        iniciarDesvioDeObstaculo();
+      } else {
+        seguirLinha();
+      }
 
-void loop(){
+      // Preserve a regra original de entrada. Confirme a polaridade dos
+      // sensores C1/C2 na arena antes da prova.
+      if (digitalRead(C1) == HIGH && digitalRead(C2) == HIGH) {
+        estadoAtual = RESGATE;
+        faseObstaculo = SEM_OBSTACULO;
+        Serial.println(F("ENTRANDO NO RESGATE"));
+      }
+      break;
 
+    case RESGATE:
+      modoResgate();
+      break;
 
-
-switch(estadoAtual){
-
-
-
-case LINHA:
-
-
-seguirLinha();
-
-
-// exemplo de entrada no resgate
-
-if(
-digitalRead(C1)==HIGH &&
-digitalRead(C2)==HIGH
-){
-
-estadoAtual=RESGATE;
-
-}
-
-
-break;
-
-
-
-case RESGATE:
-
-
-modoResgate();
-
-
-break;
-
-
-
-case SAIDA_RESGATE:
-
-
-sairResgate();
-
-
-break;
-
-
-
-}
-
-
-
-delay(50);
-
-
+    case SAIDA_RESGATE:
+      sairResgate();
+      break;
+  }
 }
