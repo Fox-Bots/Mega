@@ -1,0 +1,405 @@
+/*
+   MEGA MESTRE OBR
+   Seguidor de linha + Resgate
+   A2a + Ultrassônicos da Escrava
+*/
+
+
+#include <A2a.h>
+
+
+#define ENDERECO_ESCRAVA 8
+
+
+A2a arduinoMaster;
+
+
+// ================= MOTORES =================
+
+#define ME_F 2
+#define ME_R 3
+
+#define MD_F 4
+#define MD_R 5
+
+
+
+// ================= SENSORES LINHA =================
+
+#define C1 A7
+
+#define S1 A1
+#define S2 A2
+#define S3 A3
+#define S4 A4
+#define S5 A5
+
+#define S6 A11
+
+#define C2 A8
+
+
+
+// ================= ULTRASSÔNICOS RECEBIDOS =================
+
+int ultraFrente = 400;
+int ultraEsquerda = 400;
+int ultraDireita = 400;
+int ultraTras = 400;
+
+
+
+#define LIMITE_PAREDE 35
+#define LIMITE_OBJETO 20
+
+
+
+// ================= ESTADOS =================
+
+enum Estado{
+
+LINHA,
+RESGATE,
+SAIDA_RESGATE
+
+};
+
+
+Estado estadoAtual = LINHA;
+
+
+String movimento;
+
+
+
+// ================= SETUP =================
+
+void setup(){
+
+
+Serial.begin(9600);
+
+
+arduinoMaster.begin();
+
+
+
+pinMode(ME_F,OUTPUT);
+pinMode(ME_R,OUTPUT);
+
+pinMode(MD_F,OUTPUT);
+pinMode(MD_R,OUTPUT);
+
+
+
+Serial.println("MEGA MESTRE OBR ONLINE");
+
+
+}
+
+
+
+// ================= MOTORES =================
+
+
+void frente(){
+
+digitalWrite(ME_F,HIGH);
+digitalWrite(ME_R,LOW);
+
+digitalWrite(MD_F,HIGH);
+digitalWrite(MD_R,LOW);
+
+movimento="FRENTE";
+
+}
+
+
+
+void esquerda(){
+
+digitalWrite(ME_F,LOW);
+digitalWrite(ME_R,LOW);
+
+digitalWrite(MD_F,HIGH);
+digitalWrite(MD_R,LOW);
+
+movimento="ESQUERDA";
+
+}
+
+
+
+void direita(){
+
+digitalWrite(ME_F,HIGH);
+digitalWrite(ME_R,LOW);
+
+digitalWrite(MD_F,LOW);
+digitalWrite(MD_R,LOW);
+
+movimento="DIREITA";
+
+}
+
+
+
+void parar(){
+
+digitalWrite(ME_F,LOW);
+digitalWrite(ME_R,LOW);
+
+digitalWrite(MD_F,LOW);
+digitalWrite(MD_R,LOW);
+
+movimento="PARADO";
+
+}
+
+
+
+// ================= LINHA =================
+
+
+void seguirLinha(){
+
+
+int s1=digitalRead(S1);
+int s2=digitalRead(S2);
+int s3=digitalRead(S3);
+int s4=digitalRead(S4);
+int s5=digitalRead(S5);
+int s6=digitalRead(S6);
+
+
+
+if(s1==LOW || s2==LOW){
+
+esquerda();
+
+}
+
+
+else if(s3==LOW || s6==LOW){
+
+frente();
+
+}
+
+
+else if(s4==LOW || s5==LOW){
+
+direita();
+
+}
+
+
+else{
+
+frente();
+
+}
+
+
+
+}
+
+
+
+// ================= RESGATE =================
+
+
+void modoResgate(){
+
+
+Serial.println("=== RESGATE ===");
+
+
+
+// RECEBER DADOS DA ESCRAVA
+// Coloque aqui a função da sua A2a:
+//
+// ultraFrente = leitura(8,1);
+// ultraEsquerda = leitura(8,2);
+// ultraDireita = leitura(8,3);
+// ultraTras = leitura(8,4);
+
+
+
+Serial.print("Frente: ");
+Serial.println(ultraFrente);
+
+
+Serial.print("Esq: ");
+Serial.println(ultraEsquerda);
+
+
+Serial.print("Dir: ");
+Serial.println(ultraDireita);
+
+
+Serial.print("Tras: ");
+Serial.println(ultraTras);
+
+
+
+
+// Obstáculo na frente
+
+if(ultraFrente < LIMITE_OBJETO){
+
+
+parar();
+
+delay(200);
+
+
+// escolhe lado livre
+
+if(ultraDireita > ultraEsquerda){
+
+
+direita();
+
+delay(500);
+
+
+}
+
+
+else{
+
+
+esquerda();
+
+delay(500);
+
+
+}
+
+
+
+}
+
+
+// corredor com paredes
+
+else if(
+ultraEsquerda < LIMITE_PAREDE &&
+ultraDireita < LIMITE_PAREDE
+){
+
+
+Serial.println("CORREDOR DE RESGATE");
+
+
+frente();
+
+
+}
+
+
+
+// espaço livre
+
+else{
+
+
+frente();
+
+
+}
+
+
+
+}
+
+
+
+// ================= SAÍDA =================
+
+
+void sairResgate(){
+
+
+if(digitalRead(S6)==LOW){
+
+
+estadoAtual=LINHA;
+
+
+}
+
+else{
+
+
+frente();
+
+}
+
+
+}
+
+
+
+// ================= LOOP =================
+
+
+void loop(){
+
+
+
+switch(estadoAtual){
+
+
+
+case LINHA:
+
+
+seguirLinha();
+
+
+// exemplo de entrada no resgate
+
+if(
+digitalRead(C1)==HIGH &&
+digitalRead(C2)==HIGH
+){
+
+estadoAtual=RESGATE;
+
+}
+
+
+break;
+
+
+
+case RESGATE:
+
+
+modoResgate();
+
+
+break;
+
+
+
+case SAIDA_RESGATE:
+
+
+sairResgate();
+
+
+break;
+
+
+
+}
+
+
+
+delay(50);
+
+
+}
