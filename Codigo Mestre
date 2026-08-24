@@ -381,7 +381,7 @@ void loop() {
         seguirLinha();
       }
 
-      if (digitalRead(C1) == HIGH && digitalRead(C2) == HIGH) {
+      if (escravaOnline && digitalRead(C1) == HIGH && digitalRead(C2) == HIGH) {
         estadoAtual = RESGATE;
         faseObstaculo = SEM_OBSTACULO;
         Serial.println(F("ENTRANDO NO RESGATE"));
