@@ -1,21 +1,32 @@
 /*
   MEGA MESTRE OBR
-  Seguidor de linha, obstaculo e resgate.
-  Recebe quatro distancias em cm da placa escrava A2a:
-  frente, esquerda, direita e tras.
+  Mestre: relés dos motores e sensores de linha.
+  Escrava A2a: ultrassônicos e garra.
+
+  Relés:
+  ME_F (2) = motor esquerdo para frente
+  ME_R (3) = motor esquerdo para ré
+  MD_F (4) = motor direito para frente
+  MD_R (5) = motor direito para ré
 */
 
 #include <A2a.h>
+#include <Wire.h>
 
 #define ENDERECO_ESCRAVA 8
-
 A2a arduinoMaster;
 
-// ================= MOTORES =================
+// ================= RELES DOS MOTORES (MESTRE) =================
 #define ME_F 2
 #define ME_R 3
 #define MD_F 4
 #define MD_R 5
+
+// A maioria dos módulos de relé de dois canais é ativa em LOW.
+// Se, com todos os relés desligados, os LEDs dos relés acenderem,
+// troque true por false.
+const bool RELE_ATIVO_EM_LOW = true;
+const unsigned long TEMPO_DESLIGADO_ENTRE_TROCAS_MS = 8UL;
 
 // ================= SENSORES DE LINHA =================
 #define C1 A7
@@ -40,7 +51,7 @@ const int LIMITE_VITIMA_CM = 14;
 const int LIMITE_DEPOSITO_CM = 18;
 const int LIMITE_LATERAL_OBSTACULO_CM = 30;
 
-const unsigned long INTERVALO_LEITURA_US_MS = 80UL;
+const unsigned long INTERVALO_LEITURA_US_MS = 100UL;
 const unsigned long TEMPO_MAX_GAP_MS = 650UL;
 const unsigned long TEMPO_GIRO_DESVIO_MS = 300UL;
 const unsigned long TEMPO_MAX_CONTORNO_MS = 2800UL;
@@ -50,103 +61,123 @@ int ultraEsquerda = DISTANCIA_SEM_ECO_CM;
 int ultraDireita = DISTANCIA_SEM_ECO_CM;
 int ultraTras = DISTANCIA_SEM_ECO_CM;
 
+bool escravaOnline = false;
 unsigned long ultimaLeituraUltrassomMs = 0;
 unsigned long inicioGapMs = 0;
 unsigned long inicioManobraMs = 0;
 unsigned long ultimoLogMs = 0;
 
 // ================= ESTADOS =================
-enum Estado {
-  LINHA,
-  RESGATE,
-  SAIDA_RESGATE
-};
-
-enum Direcao {
-  DIRECAO_ESQUERDA,
-  DIRECAO_RETA,
-  DIRECAO_DIREITA
-};
-
+enum Estado { LINHA, RESGATE, SAIDA_RESGATE };
+enum Direcao { DIRECAO_ESQUERDA, DIRECAO_RETA, DIRECAO_DIREITA };
 enum FaseObstaculo {
   SEM_OBSTACULO,
   SAINDO_DA_LINHA,
   CONTORNANDO_OBSTACULO,
   VOLTANDO_PARA_LINHA
 };
+enum Movimento {
+  MOVIMENTO_DESCONHECIDO,
+  MOVIMENTO_PARADO,
+  MOVIMENTO_FRENTE,
+  MOVIMENTO_ESQUERDA,
+  MOVIMENTO_DIREITA
+};
 
 Estado estadoAtual = LINHA;
 Direcao ultimaCorrecao = DIRECAO_RETA;
 Direcao ladoDesvio = DIRECAO_DIREITA;
 FaseObstaculo faseObstaculo = SEM_OBSTACULO;
+Movimento movimentoAtual = MOVIMENTO_DESCONHECIDO;
 
 bool obstaculoFoiVistoPelosSensores = false;
 byte leiturasLivres = 0;
 
-// ================= SETUP =================
-void setup() {
-  Serial.begin(9600);
-  arduinoMaster.begin();
-
-  pinMode(ME_F, OUTPUT);
-  pinMode(ME_R, OUTPUT);
-  pinMode(MD_F, OUTPUT);
-  pinMode(MD_R, OUTPUT);
-
-  pinMode(C1, INPUT);
-  pinMode(C2, INPUT);
-  pinMode(S1, INPUT);
-  pinMode(S2, INPUT);
-  pinMode(S3, INPUT);
-  pinMode(S4, INPUT);
-  pinMode(S5, INPUT);
-  pinMode(S6, INPUT);
-
-  parar();
-  Serial.println(F("MEGA MESTRE OBR ONLINE"));
+// ================= RELES =================
+void escreverRele(byte pino, bool ligar) {
+  bool nivel = RELE_ATIVO_EM_LOW ? !ligar : ligar;
+  digitalWrite(pino, nivel ? HIGH : LOW);
 }
 
-// ================= MOTORES =================
+void aplicarMovimento(Movimento novoMovimento,
+                      bool esquerdoFrente,
+                      bool esquerdoRe,
+                      bool direitoFrente,
+                      bool direitoRe) {
+  if (novoMovimento == movimentoAtual) {
+    return;
+  }
+
+  // Nunca comute frente e ré de um mesmo motor ao mesmo tempo.
+  escreverRele(ME_F, false);
+  escreverRele(ME_R, false);
+  escreverRele(MD_F, false);
+  escreverRele(MD_R, false);
+  delay(TEMPO_DESLIGADO_ENTRE_TROCAS_MS);
+
+  escreverRele(ME_F, esquerdoFrente);
+  escreverRele(ME_R, esquerdoRe);
+  escreverRele(MD_F, direitoFrente);
+  escreverRele(MD_R, direitoRe);
+
+  movimentoAtual = novoMovimento;
+}
+
 void frente() {
-  digitalWrite(ME_F, HIGH);
-  digitalWrite(ME_R, LOW);
-  digitalWrite(MD_F, HIGH);
-  digitalWrite(MD_R, LOW);
+  aplicarMovimento(MOVIMENTO_FRENTE, true, false, true, false);
 }
 
 void esquerda() {
-  digitalWrite(ME_F, LOW);
-  digitalWrite(ME_R, LOW);
-  digitalWrite(MD_F, HIGH);
-  digitalWrite(MD_R, LOW);
+  aplicarMovimento(MOVIMENTO_ESQUERDA, false, false, true, false);
 }
 
 void direita() {
-  digitalWrite(ME_F, HIGH);
-  digitalWrite(ME_R, LOW);
-  digitalWrite(MD_F, LOW);
-  digitalWrite(MD_R, LOW);
+  aplicarMovimento(MOVIMENTO_DIREITA, true, false, false, false);
 }
 
 void parar() {
-  digitalWrite(ME_F, LOW);
-  digitalWrite(ME_R, LOW);
-  digitalWrite(MD_F, LOW);
-  digitalWrite(MD_R, LOW);
+  aplicarMovimento(MOVIMENTO_PARADO, false, false, false, false);
 }
 
 // ================= A2A =================
+bool escravaResponde() {
+  Wire.beginTransmission(ENDERECO_ESCRAVA);
+  return Wire.endTransmission() == 0;
+}
+
+void atualizarLeituraUltrassom(int &destino, byte variavel) {
+  byte valor = arduinoMaster.varWireRead(ENDERECO_ESCRAVA, variavel);
+
+  // O Slave.ino envia 250 sem eco. Zero nao e uma leitura valida de
+  // HC-SR04 e costuma indicar ausencia/erro de comunicacao.
+  if (valor >= 2 && valor <= DISTANCIA_SEM_ECO_CM) {
+    destino = valor;
+  }
+}
+
 void lerUltrassonicos() {
   if (millis() - ultimaLeituraUltrassomMs < INTERVALO_LEITURA_US_MS) {
     return;
   }
 
   ultimaLeituraUltrassomMs = millis();
+  escravaOnline = escravaResponde();
 
-  ultraFrente = arduinoMaster.varWireRead(ENDERECO_ESCRAVA, VAR_FRENTE);
-  ultraEsquerda = arduinoMaster.varWireRead(ENDERECO_ESCRAVA, VAR_ESQUERDA);
-  ultraDireita = arduinoMaster.varWireRead(ENDERECO_ESCRAVA, VAR_DIREITA);
-  ultraTras = arduinoMaster.varWireRead(ENDERECO_ESCRAVA, VAR_TRAS);
+  // Sem escrava, o mestre continua seguindo linha e os relés continuam
+  // funcionando; apenas as funções que dependem dos ultrassônicos são
+  // desativadas.
+  if (!escravaOnline) {
+    ultraFrente = DISTANCIA_SEM_ECO_CM;
+    ultraEsquerda = DISTANCIA_SEM_ECO_CM;
+    ultraDireita = DISTANCIA_SEM_ECO_CM;
+    ultraTras = DISTANCIA_SEM_ECO_CM;
+    return;
+  }
+
+  atualizarLeituraUltrassom(ultraFrente, VAR_FRENTE);
+  atualizarLeituraUltrassom(ultraEsquerda, VAR_ESQUERDA);
+  atualizarLeituraUltrassom(ultraDireita, VAR_DIREITA);
+  atualizarLeituraUltrassom(ultraTras, VAR_TRAS);
 }
 
 void registrarUltrassons() {
@@ -155,7 +186,9 @@ void registrarUltrassons() {
   }
 
   ultimoLogMs = millis();
-  Serial.print(F("US F/E/D/T: "));
+  Serial.print(F("I2C: "));
+  Serial.print(escravaOnline ? F("OK") : F("OFF"));
+  Serial.print(F(" | US F/E/D/T: "));
   Serial.print(ultraFrente);
   Serial.print('/');
   Serial.print(ultraEsquerda);
@@ -173,8 +206,6 @@ bool linhaVisivel() {
 }
 
 void procurarLinhaDepoisDoGap() {
-  // Atravessa gaps em linha reta; se a linha nao reaparecer dentro da
-  // margem calibrada, procura na ultima direcao de correcao.
   if (ultimaCorrecao == DIRECAO_ESQUERDA) {
     esquerda();
   } else if (ultimaCorrecao == DIRECAO_DIREITA) {
@@ -219,7 +250,7 @@ void seguirLinha() {
   }
 }
 
-// ================= OBSTACULO NO TRAJETO =================
+// ================= OBSTACULO =================
 bool obstaculoNosSensoresLateraisOuTras() {
   return ultraEsquerda < LIMITE_LATERAL_OBSTACULO_CM ||
          ultraDireita < LIMITE_LATERAL_OBSTACULO_CM ||
@@ -232,8 +263,7 @@ void iniciarDesvioDeObstaculo() {
   inicioManobraMs = millis();
   obstaculoFoiVistoPelosSensores = false;
   leiturasLivres = 0;
-
-  Serial.println(F("OBSTACULO NA FRENTE: iniciando desvio"));
+  Serial.println(F("OBSTACULO NA FRENTE"));
 }
 
 void executarDesvioDeObstaculo() {
@@ -261,14 +291,10 @@ void executarDesvioDeObstaculo() {
       leiturasLivres++;
     }
 
-    // Tres leituras livres apos a deteccao confirmam que o objeto ficou
-    // para tras/lado. O limite de tempo evita travar se a geometria do
-    // sensor nao enxergar o obstaculo durante todo o contorno.
     if ((obstaculoFoiVistoPelosSensores && leiturasLivres >= 3) ||
         millis() - inicioManobraMs >= TEMPO_MAX_CONTORNO_MS) {
       faseObstaculo = VOLTANDO_PARA_LINHA;
       inicioManobraMs = millis();
-      Serial.println(F("OBSTACULO ULTRAPASSADO: procurando a linha"));
     }
     return;
   }
@@ -291,30 +317,25 @@ void executarDesvioDeObstaculo() {
 void modoResgate() {
   registrarUltrassons();
 
-  // Um HC-SR04 identifica proximidade, nao tipo de objeto. Pare aqui para
-  // a rotina do seu mecanismo de coleta tratar uma possivel vitima/parede.
-  if (ultraFrente < LIMITE_VITIMA_CM) {
+  if (!escravaOnline) {
     parar();
-    Serial.println(F("OBJETO FRONTAL: possivel vitima ou parede"));
+    Serial.println(F("SEM ESCRAVA: RESGATE PAUSADO"));
     return;
   }
 
-  // O sensor traseiro apenas indica que ha algo proximo atras. Ele nao
-  // distingue sozinho a area verde da vermelha; isso exige sensor de cor
-  // ou outra estrategia de identificacao.
-  if (ultraTras < LIMITE_DEPOSITO_CM) {
-    Serial.println(F("OBJETO TRASEIRO: possivel parede/ponto de deposito"));
+  if (ultraFrente < LIMITE_VITIMA_CM) {
+    parar();
+    Serial.println(F("OBJETO FRONTAL: POSSIVEL VITIMA/PAREDE"));
+    return;
   }
 
-  if (ultraEsquerda < LIMITE_PAREDE_CM &&
-      ultraDireita < LIMITE_PAREDE_CM) {
-    Serial.println(F("CORREDOR DE RESGATE"));
+  if (ultraTras < LIMITE_DEPOSITO_CM) {
+    Serial.println(F("TRAS: POSSIVEL PONTO DE DEPOSITO"));
   }
 
   frente();
 }
 
-// ================= SAIDA =================
 void sairResgate() {
   if (digitalRead(S6) == LOW) {
     estadoAtual = LINHA;
@@ -324,22 +345,42 @@ void sairResgate() {
   }
 }
 
-// ================= LOOP =================
+// ================= SETUP E LOOP =================
+void setup() {
+  Serial.begin(9600);
+  arduinoMaster.begin();
+
+  pinMode(ME_F, OUTPUT);
+  pinMode(ME_R, OUTPUT);
+  pinMode(MD_F, OUTPUT);
+  pinMode(MD_R, OUTPUT);
+
+  pinMode(C1, INPUT);
+  pinMode(C2, INPUT);
+  pinMode(S1, INPUT);
+  pinMode(S2, INPUT);
+  pinMode(S3, INPUT);
+  pinMode(S4, INPUT);
+  pinMode(S5, INPUT);
+  pinMode(S6, INPUT);
+
+  parar();
+  Serial.println(F("MEGA MESTRE OBR ONLINE"));
+}
+
 void loop() {
   lerUltrassonicos();
 
   switch (estadoAtual) {
     case LINHA:
-      if (faseObstaculo != SEM_OBSTACULO) {
+      if (escravaOnline && faseObstaculo != SEM_OBSTACULO) {
         executarDesvioDeObstaculo();
-      } else if (ultraFrente < LIMITE_OBSTACULO_CM) {
+      } else if (escravaOnline && ultraFrente < LIMITE_OBSTACULO_CM) {
         iniciarDesvioDeObstaculo();
       } else {
         seguirLinha();
       }
 
-      // Preserve a regra original de entrada. Confirme a polaridade dos
-      // sensores C1/C2 na arena antes da prova.
       if (digitalRead(C1) == HIGH && digitalRead(C2) == HIGH) {
         estadoAtual = RESGATE;
         faseObstaculo = SEM_OBSTACULO;
